@@ -334,6 +334,8 @@ public class AdbConnection implements Closeable {
                             break;
                         }
                         case AdbProtocol.A_OPEN:
+                            openLocalSocket(msg);
+                            break;
                         case AdbProtocol.A_SYNC:
                         default:
                             Log.e(TAG, String.format("Unrecognized command = 0x%x", msg.command));
@@ -524,6 +526,44 @@ public class AdbConnection implements Closeable {
 
         return stream;
     }
+
+    private void openLocalSocket(AdbProtocol.Message msg) throws IOException, InterruptedException, AdbPairingRequiredException {
+
+        int localId = ++mLastLocalId;
+
+        if (!mConnectAttempted) {
+            throw new IllegalStateException("connect() must be called first");
+        }
+
+        waitForConnection(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+
+        //目前仅支持本地tcp端口代理
+        Socket socket;
+        try {
+            int port = Integer.parseInt(new String(msg.payload)
+                    .replace("tcp:", "")
+                    .replace("\0", ""));
+            socket = new Socket("127.0.0.1", port);
+            socket.setTcpNoDelay(true);
+        } catch (Exception e) {
+            return;
+        }
+
+
+        //添加本地流设置代理
+        AdbStream stream = new AdbStream(this, localId);
+        stream.updateRemoteId(msg.arg0);
+        mOpenedStreams.put(localId, stream);
+        stream.setProxySocket(socket);
+
+
+        // Check if the OPEN request was rejected
+        if (stream.isClosed()) {
+            mOpenedStreams.remove(localId);
+            throw new ConnectException("Stream open actively rejected by remote peer.");
+        }
+    }
+
 
     private boolean waitForConnection(long timeout, @NonNull TimeUnit unit)
             throws InterruptedException, IOException, AdbPairingRequiredException {

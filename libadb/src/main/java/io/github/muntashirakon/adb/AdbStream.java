@@ -2,8 +2,10 @@
 
 package io.github.muntashirakon.adb;
 
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.IOException;
+import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -14,6 +16,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 // Copyright 2013 Cameron Gutman
 public class AdbStream implements Closeable {
+
+    /**
+     * 用来代理访问
+     */
+    private Socket proxySocket;
+
 
     /**
      * The AdbConnection object that the stream communicates over
@@ -296,5 +304,69 @@ public class AdbStream implements Closeable {
             byte[] data = mReadQueue.peek();
             return data == null ? 0 : data.length;
         }
+    }
+
+
+    /**
+     * 代理访问的socket
+     *
+     * @param socket
+     */
+    public void setProxySocket(Socket socket) {
+        this.proxySocket = socket;
+        try {
+            sendReady();
+            readyForWrite();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        new Thread(() -> {
+            while (!mIsClosed) {
+                try {
+                    int available = available();
+                    if (available > 0) {
+                        byte[] b = new byte[available];
+                        read(b, 0, available);
+                        proxySocket.getOutputStream().write(b);
+                        proxySocket.getOutputStream().flush();
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }).start();
+        new Thread(() -> {
+            int maxData = 2048;
+            try {
+                maxData = mAdbConnection.getMaxData();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buffer = new byte[maxData];
+            while (!mIsClosed) {
+                try {
+                    int len;
+                    bos.reset();
+                    if ((len = proxySocket.getInputStream().read(buffer)) != -1) {
+                        if (len == buffer.length) {
+                            write(buffer, 0, buffer.length);
+                        } else {
+                            bos.write(buffer, 0, len);
+                            byte[] arr = bos.toByteArray();
+                            write(arr, 0, arr.length);
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+            try {
+                bos.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }).start();
     }
 }
